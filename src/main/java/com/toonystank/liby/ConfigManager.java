@@ -1,10 +1,10 @@
 package com.toonystank.liby;
 
 
-import com.toonystank.liby.config.ConfigurationSection;
-import com.toonystank.liby.config.file.FileConfiguration;
-import com.toonystank.liby.config.file.YamlConfiguration;
 import lombok.Getter;
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
