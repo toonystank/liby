@@ -2,6 +2,7 @@ package com.toonystank.liby;
 
 
 import lombok.Getter;
+import lombok.Setter;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -20,11 +21,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 @SuppressWarnings("unused")
-public class ConfigManager {
+public class ConfigManger {
 
     /**
      * -- GETTER --
@@ -33,7 +33,7 @@ public class ConfigManager {
      */
     @Getter
     private File file;
-    private Logger logger;
+    private final Logger logger;
     public String fileName;
     /**
      * -- GETTER --
@@ -54,6 +54,9 @@ public class ConfigManager {
     @Nullable
     private String corePath = "";
 
+    @Setter
+    private String languageTag;
+
     /**
      * Initializes the Config.
      *
@@ -62,7 +65,7 @@ public class ConfigManager {
      * @param force    boolean enable/disable force file update
      * @param copy     boolean either copy the file from the plugin or not
      */
-    public ConfigManager(@Nullable Plugin plugin, String fileName, boolean force, boolean copy) throws IOException {
+    public ConfigManger(@Nullable Plugin plugin, String fileName, boolean force, boolean copy) throws IOException {
         this.plugin = plugin;
         if (plugin != null) this.logger = plugin.getLogger();
         else this.logger = Logger.getGlobal();
@@ -78,7 +81,7 @@ public class ConfigManager {
             try {
                 copy(force);
             } catch (IllegalArgumentException e) {
-                logger.info(e.getMessage());
+                logger.warning(e.getMessage());
             }
         }
         if (!file.exists()) {
@@ -98,7 +101,7 @@ public class ConfigManager {
      * @param force    boolean enable/disable force file update
      * @param copy     boolean either copy the file from the plugin or not
      */
-    public ConfigManager(@Nullable Plugin plugin, String fileName, String path, boolean force, boolean copy) throws IOException {
+    public ConfigManger(@Nullable Plugin plugin, String fileName, @Nullable String path, boolean force, boolean copy) throws IOException {
         this.plugin = plugin;
         if (plugin != null) this.logger = plugin.getLogger();
         else this.logger = Logger.getGlobal();
@@ -114,7 +117,7 @@ public class ConfigManager {
      * @param fileName String
      * @param path     String path you want to initialize the config in
      */
-    public ConfigManager(Plugin plugin, String fileName, @Nullable String path) throws IOException {
+    public ConfigManger(Plugin plugin, String fileName, @Nullable String path) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
         this.corePath = path;
@@ -166,7 +169,7 @@ public class ConfigManager {
      * @param consoleLogger boolean
      * @return Manager
      */
-    public ConfigManager setConsoleLogger(boolean consoleLogger) {
+    public ConfigManger setConsoleLogger(boolean consoleLogger) {
         this.consoleLogger = consoleLogger;
         return this;
     }
@@ -175,7 +178,7 @@ public class ConfigManager {
      * @param configVersion Version of the config
      * @return Manager
      */
-    public ConfigManager setConfigVersion(String configVersion) {
+    public ConfigManger setConfigVersion(String configVersion) {
         this.configVersion = configVersion;
         return this;
     }
@@ -274,20 +277,20 @@ public class ConfigManager {
         try {
             Files.createDirectories(backupFilePath.getParent());
             Files.move(file.toPath(), backupFilePath);
-            logger.info("Backed up " + file.getName() + " to " + backupFilePath.toString());
+            logger.info("Backed up " + file.getName() + " to " + backupFilePath);
         } catch (IOException e) {
-            logger.warning("Failed to create backup file " + backupFilePath.toString());
+            logger.warning("Failed to create backup file " + backupFilePath);
         }
     }
 
     private void updateConfigFile() {
+        String fileName = file.getName();
         if (isInFolder) {
-            copy(true, corePath + File.separator + file.getName());
-        } else copy(true);
+            copy(true, corePath + File.separator + fileName);
+        } else copy(true,fileName);
         this.config = YamlConfiguration.loadConfiguration(this.file);
         logger.info("Updated " + file.getName() + " to version " + this.configVersion);
     }
-
 
     /**
      * update the config's existing path with given value.
@@ -394,41 +397,106 @@ public class ConfigManager {
             throw new IllegalArgumentException("ResourcePath cannot be null or empty");
         }
 
+        // Normalize the resource path
         resourcePath = resourcePath.replace('\\', '/');
+
+        // Ensure the correct resource path with the language tag
+        resourcePath = applyLanguageTagToResourcePath(resourcePath);
+
+        // Handle renaming of old resource file if necessary
+        handleOldResourceFileRenaming(resourcePath);
+
         InputStream in = getResource(resourcePath);
         if (in == null) {
-            throw new IllegalArgumentException("The embedded resource '" + resourcePath + "' cannot be found in " + file);
+            logger.severe("The embedded resource '" + resourcePath + "' cannot be found.");
+            return;  // Exit the method if the resource is not found
         }
 
         File outFile = new File(plugin.getDataFolder(), resourcePath);
-        int lastIndex = resourcePath.lastIndexOf('/');
-        File outDir = new File(plugin.getDataFolder(), resourcePath.substring(0, Math.max(lastIndex, 0)));
+        File outDir = getOutputDirectory(resourcePath);
 
         if (!outDir.exists()) {
-            if (outDir.mkdirs()) {
-                logger.log(Level.INFO, "Created directory " + outDir);
-            } else {
-                logger.log(Level.WARNING, "Could not create directory " + outDir);
-            }
+            createOutputDirectory(outDir);
         }
 
-        try {
-            if (!outFile.exists() || replace) {
-                OutputStream out = Files.newOutputStream(outFile.toPath());
-                byte[] buf = new byte[1024];
-                int len;
-                while ((len = in.read(buf)) > 0) {
-                    out.write(buf, 0, len);
-                }
-                out.close();
-                in.close();
+        saveToFile(outFile, in, replace);
+    }
+
+    private String applyLanguageTagToResourcePath(String resourcePath) {
+        if (languageTag == null) return resourcePath;
+        int lastDotIndex = resourcePath.lastIndexOf('.');
+        String baseName = lastDotIndex == -1 ? resourcePath : resourcePath.substring(0, lastDotIndex);
+        String extension = lastDotIndex == -1 ? "" : resourcePath.substring(lastDotIndex);
+
+        // Check if the language tag is already part of the baseName to avoid duplications
+        if (baseName.endsWith("_" + languageTag)) {
+            return resourcePath;
+        }
+
+        return baseName + "_" + languageTag + extension;
+    }
+
+    private void handleOldResourceFileRenaming(String newResourcePath) {
+        File oldFile;
+        if (corePath != null) oldFile = new File(plugin.getDataFolder() + File.separator + corePath + file.getName());
+        else oldFile = new File(plugin.getDataFolder() + File.separator + file.getName());
+        File newFile = new File(plugin.getDataFolder(), newResourcePath);
+
+        if (oldFile.exists() && !newFile.exists()) {
+            if (!oldFile.renameTo(newFile)) {
+                logger.severe("Could not rename old resource file " + oldFile.getName() + " to " + newFile.getName());
             } else {
-                logger.log(Level.WARNING, "Could not save " + outFile.getName() + " to " + outFile + " because " + outFile.getName() + " already exists.");
+                logger.info("Renamed old resource file " + oldFile.getName() + " to " + newFile.getName());
             }
-        } catch (IOException ex) {
-            logger.log(Level.SEVERE, "Could not save " + outFile.getName() + " to " + outFile, ex);
         }
     }
+
+    private File getOutputDirectory(String resourcePath) {
+        int lastIndex = resourcePath.lastIndexOf('/');
+        String dirPath = resourcePath.substring(0, Math.max(lastIndex, 0));
+        return new File(plugin.getDataFolder(), dirPath);
+    }
+
+    private void createOutputDirectory(File outDir) {
+        if (outDir.mkdirs()) {
+            logger.info("Created directory " + outDir);
+        } else {
+            logger.warning("Could not create directory " + outDir);
+        }
+    }
+
+    private void saveToFile(File outFile, InputStream in, boolean replace) {
+        OutputStream out = null;
+        try {
+            if (!outFile.exists() || replace) {
+                out = Files.newOutputStream(outFile.toPath());
+                byte[] buffer = new byte[1024];
+                int length;
+                while ((length = in.read(buffer)) > 0) {
+                    out.write(buffer, 0, length);
+                }
+            } else {
+                logger.warning("Could not save " + outFile.getName() + " to " + outFile + " because it already exists.");
+            }
+        } catch (IOException ex) {
+            logger.severe("Could not save " + outFile.getName() + " to " + outFile + ". Error: " + ex.getMessage());
+        } finally {
+            try {
+                if (out != null) {
+                    out.close();
+                }
+                if (in != null) {
+                    in.close();
+                }
+            } catch (IOException ex) {
+                logger.severe("Error closing file streams: " + ex.getMessage());
+            }
+        }
+    }
+
+
+
+
 
     public InputStream getResource(String filename) {
         if (filename == null) {
@@ -450,3 +518,4 @@ public class ConfigManager {
         }
     }
 }
+
